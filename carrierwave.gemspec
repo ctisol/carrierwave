@@ -23,7 +23,7 @@ Gem::Specification.new do |s|
   s.rubygems_version = %q{1.3.5}
   s.specification_version = 3
 
-  s.add_dependency("activesupport", ["~> 3.0"])
+  s.add_dependency("activesupport", ["~> 3"])
 
   s.add_development_dependency "rails", ["~> 3"]
   if defined?(JRUBY_VERSION)
