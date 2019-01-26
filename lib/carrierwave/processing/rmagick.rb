@@ -1,15 +1,5 @@
 # encoding: utf-8
 
-unless defined? Magick
-  begin
-    require 'rmagick'
-  rescue LoadError
-    require 'RMagick'
-  rescue LoadError
-    puts "WARNING: Failed to require rmagick, image processing may fail!"
-  end
-end
-
 module CarrierWave
 
   ##
@@ -70,6 +60,17 @@ module CarrierWave
   module RMagick
     extend ActiveSupport::Concern
 
+    included do
+      begin
+        require "rmagick"
+      rescue LoadError
+        require "RMagick"
+      rescue LoadError => e
+        e.message << " (You may need to install the rmagick gem)"
+        raise e
+      end
+    end
+
     module ClassMethods
       def convert(format)
         process :convert => format
@@ -89,6 +90,10 @@ module CarrierWave
 
       def resize_and_pad(width, height, background=:transparent, gravity=::Magick::CenterGravity)
         process :resize_and_pad => [width, height, background, gravity]
+      end
+
+      def resize_to_geometry_string(geometry_string)
+        process :resize_to_geometry_string => [geometry_string]
       end
     end
 
@@ -111,6 +116,7 @@ module CarrierWave
     #
     def convert(format)
       manipulate!(:format => format)
+      @format = format
     end
 
     ##
@@ -209,7 +215,7 @@ module CarrierWave
     def resize_and_pad(width, height, background=:transparent, gravity=::Magick::CenterGravity)
       manipulate! do |img|
         img.resize_to_fit!(width, height)
-        new_img = ::Magick::Image.new(width, height)
+        new_img = ::Magick::Image.new(width, height) { self.background_color = background == :transparent ? 'rgba(255,255,255,0)' : background.to_s }
         if background == :transparent
           filled = new_img.matte_floodfill(1, 1)
         else
@@ -220,6 +226,28 @@ module CarrierWave
         destroy_image(img)
         filled = yield(filled) if block_given?
         filled
+      end
+    end
+
+    ##
+    # Resize the image per the provided geometry string.
+    #
+    # === Parameters
+    #
+    # [geometry_string (String)] the proportions in which to scale image
+    #
+    # === Yields
+    #
+    # [Magick::Image] additional manipulations to perform
+    #
+    def resize_to_geometry_string(geometry_string)
+      manipulate! do |img|
+        new_img = img.change_geometry(geometry_string) do |new_width, new_height|
+          img.resize(new_width, new_height)
+        end
+        destroy_image(img)
+        new_img = yield(new_img) if block_given?
+        new_img
       end
     end
 
@@ -238,38 +266,82 @@ module CarrierWave
     # === Yields
     #
     # [Magick::Image] manipulations to perform
+    # [Integer] Frame index if the image contains multiple frames
+    # [Hash] options, see below
+    #
+    # === Options
+    #
+    # The options argument to this method is also yielded as the third
+    # block argument.
+    #
+    # Currently, the following options are defined:
+    #
+    # ==== :write
+    # A hash of assignments to be evaluated in the block given to the RMagick write call.
+    #
+    # An example:
+    #
+    #      manipulate! do |img, index, options|
+    #        options[:write] = {
+    #          :quality => 50,
+    #          :depth => 8
+    #        }
+    #        img
+    #      end
+    #
+    # This will translate to the following RMagick::Image#write call:
+    #
+    #     image.write do |img|
+    #       self.quality = 50
+    #       self.depth = 8
+    #     end
+    #
+    # ==== :read
+    # A hash of assignments to be given to the RMagick read call.
+    #
+    # The options available are identical to those for write, but are passed in directly, like this:
+    #
+    #     manipulate! :read => { :density => 300 }
+    #
+    # ==== :format
+    # Specify the output format. If unset, the filename extension is used to determine the format.
     #
     # === Raises
     #
     # [CarrierWave::ProcessingError] if manipulation failed.
     #
-    def manipulate!(options={})
+    def manipulate!(options={}, &block)
       cache_stored_file! if !cached?
-      image = ::Magick::Image.read(current_path)
 
-      frames = if image.size > 1
-        list = ::Magick::ImageList.new
-        image.each do |frame|
-          list << yield( frame )
-        end
-        list
-      else
-        frame = image.first
-        frame = yield( frame ) if block_given?
-        frame
+      read_block = create_info_block(options[:read])
+      image = ::Magick::Image.read(current_path, &read_block)
+      frames = ::Magick::ImageList.new
+
+      image.each_with_index do |frame, index|
+        frame = yield *[frame, index, options].take(block.arity) if block_given?
+        frames << frame if frame
       end
+      frames.append(true) if block_given?
 
-      if options[:format]
-        frames.write("#{options[:format]}:#{current_path}")
+      write_block = create_info_block(options[:write])
+      if options[:format] || @format
+        frames.write("#{options[:format] || @format}:#{current_path}", &write_block)
       else
-        frames.write(current_path)
+        frames.write(current_path, &write_block)
       end
       destroy_image(frames)
     rescue ::Magick::ImageMagickError => e
-      raise CarrierWave::ProcessingError, I18n.translate(:"errors.messages.rmagick_processing_error", :e => e)
+      raise CarrierWave::ProcessingError, I18n.translate(:"errors.messages.rmagick_processing_error", :e => e, :default => I18n.translate(:"errors.messages.rmagick_processing_error", :e => e, :locale => :en))
     end
 
   private
+
+    def create_info_block(options)
+      return nil unless options
+      assignments = options.map { |k, v| "self.#{k} = #{v}" }
+      code = "lambda { |img| " + assignments.join(";") + "}"
+      eval code
+    end
 
     def destroy_image(image)
       image.destroy! if image.respond_to?(:destroy!)

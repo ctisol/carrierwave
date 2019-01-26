@@ -68,9 +68,11 @@ describe CarrierWave::SanitizedFile do
   end
 
   describe '#extension' do
-    it "should return the extension for complicated extensions" do
-      @sanitized_file = CarrierWave::SanitizedFile.new(file_path('complex.filename.tar.gz'))
-      @sanitized_file.extension.should == "tar.gz"
+    %w[gz bz2 z lz xz].each do |ext|
+      it "should return the extension for complicated extensions (tar.#{ext})" do
+        @sanitized_file = CarrierWave::SanitizedFile.new(file_path("complex.filename.tar.#{ext}"))
+        @sanitized_file.extension.should == "tar.#{ext}"
+      end
     end
 
     it "should return the extension for real-world user file names" do
@@ -181,14 +183,34 @@ describe CarrierWave::SanitizedFile do
       @sanitized_file = CarrierWave::SanitizedFile.new(:content_type => 'image/png')
       @sanitized_file.content_type.should == 'image/png'
     end
-    
-    it "should handle Mime::Type object" do 
+
+    it "should handle Mime::Type object" do
       @file = File.open(file_path('sponsored.doc'))
       @file.stub!(:content_type).and_return(MIME::Type.new('application/msword'))
       @sanitized_file = CarrierWave::SanitizedFile.new(@file)
       @sanitized_file.stub!(:file).and_return(@file)
       lambda { @sanitized_file.content_type }.should_not raise_error
       @sanitized_file.content_type.should == 'application/msword'
+    end
+
+    it 'should read content type from path if missing' do
+      @sanitized_file = CarrierWave::SanitizedFile.new('llama.jpg')
+      @sanitized_file.content_type.should == 'image/jpeg'
+    end
+
+    it 'does not allow spoofing of the mime type' do
+      file = File.open(file_path('jpg.png'))
+
+      sanitized_file = CarrierWave::SanitizedFile.new(file)
+      lambda { sanitized_file.content_type }.should_not raise_error
+
+      sanitized_file.content_type.should == 'image/jpeg'
+    end
+
+    it 'does not raise an error if the path is not present' do
+      sanitized_file = CarrierWave::SanitizedFile.new(nil)
+
+      lambda { sanitized_file.content_type }.should_not raise_error
     end
   end
 
@@ -247,7 +269,7 @@ describe CarrierWave::SanitizedFile do
     describe '#move_to' do
 
       after do
-        FileUtils.rm(file_path('gurr.png'))
+        FileUtils.rm_f(file_path('gurr.png'))
       end
 
       it "should be moved to the correct location" do
@@ -281,6 +303,12 @@ describe CarrierWave::SanitizedFile do
         @sanitized_file.should have_permissions(0755)
       end
 
+      it "should set the right directory permissions" do
+        @sanitized_file.move_to(file_path('new_dir','gurr.png'), nil, 0775)
+        @sanitized_file.should have_directory_permissions(0775)
+        FileUtils.rm_rf(file_path('new_dir'))
+      end
+
       it "should return itself" do
         @sanitized_file.move_to(file_path('gurr.png')).should == @sanitized_file
       end
@@ -290,7 +318,7 @@ describe CarrierWave::SanitizedFile do
     describe '#copy_to' do
 
       after do
-        FileUtils.rm(file_path('gurr.png'))
+        FileUtils.rm_f(file_path('gurr.png'))
       end
 
       it "should be copied to the correct location" do
@@ -337,6 +365,12 @@ describe CarrierWave::SanitizedFile do
       it "should set the right permissions" do
         new_file = @sanitized_file.copy_to(file_path('gurr.png'), 0755)
         new_file.should have_permissions(0755)
+      end
+
+      it "should set the right directory permissions" do
+        new_file = @sanitized_file.copy_to(file_path('new_dir', 'gurr.png'), nil, 0755)
+        new_file.should have_directory_permissions(0755)
+        FileUtils.rm_rf(file_path('new_dir'))
       end
 
       it "should preserve the file's content type" do
@@ -405,6 +439,20 @@ describe CarrierWave::SanitizedFile do
     end
   end
 
+  shared_examples_for "all valid sanitized files that are read from an IO object" do
+
+    describe '#read' do
+      it "should have an open IO object" do
+        @sanitized_file.instance_variable_get(:@file).closed?.should be_false
+      end
+
+      it "should close the IO object after reading" do
+        @sanitized_file.read
+        @sanitized_file.instance_variable_get(:@file).closed?.should be_true
+      end
+    end
+  end
+
   describe "with a valid Hash" do
     before do
       @hash = {
@@ -418,6 +466,8 @@ describe CarrierWave::SanitizedFile do
     it_should_behave_like "all valid sanitized files"
 
     it_should_behave_like "all valid sanitized files that are stored on disk"
+
+    it_should_behave_like "all valid sanitized files that are read from an IO object"
 
     describe '#path' do
       it "should return the path of the tempfile" do
@@ -444,6 +494,8 @@ describe CarrierWave::SanitizedFile do
 
     it_should_behave_like "all valid sanitized files that are stored on disk"
 
+    it_should_behave_like "all valid sanitized files that are read from an IO object"
+
     describe '#is_path?' do
       it "should be false" do
         @sanitized_file.is_path?.should be_false
@@ -465,6 +517,8 @@ describe CarrierWave::SanitizedFile do
     end
 
     it_should_behave_like "all valid sanitized files"
+
+    it_should_behave_like "all valid sanitized files that are read from an IO object"
 
     describe '#exists?' do
       it "should be false" do
@@ -509,6 +563,8 @@ describe CarrierWave::SanitizedFile do
 
     it_should_behave_like "all valid sanitized files that are stored on disk"
 
+    it_should_behave_like "all valid sanitized files that are read from an IO object"
+
     describe '#is_path?' do
       it "should be false" do
         @sanitized_file.is_path?.should be_false
@@ -523,7 +579,7 @@ describe CarrierWave::SanitizedFile do
     end
 
   end
-  
+
   describe "with a valid File object and an empty file" do
     before do
       FileUtils.cp(file_path('test.jpg'), file_path('llama.jpg'))
@@ -535,6 +591,8 @@ describe CarrierWave::SanitizedFile do
 
     it_should_behave_like "all valid sanitized files that are stored on disk"
 
+    it_should_behave_like "all valid sanitized files that are read from an IO object"
+
     describe '#is_path?' do
       it "should be false" do
         @sanitized_file.is_path?.should be_false
@@ -549,7 +607,7 @@ describe CarrierWave::SanitizedFile do
     end
 
   end
-  
+
   describe "with a valid path" do
     before do
       FileUtils.cp(file_path('test.jpg'), file_path('llama.jpg'))

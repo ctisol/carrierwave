@@ -1,7 +1,5 @@
 # encoding: utf-8
 
-require 'mini_magick'
-
 module CarrierWave
 
   ##
@@ -51,11 +49,20 @@ module CarrierWave
   #
   # http://mini_magick.rubyforge.org/
   # and
-  # http://github.com/probablycorey/mini_magick/
+  # https://github.com/minimagic/minimagick/
   #
   #
   module MiniMagick
     extend ActiveSupport::Concern
+
+    included do
+      begin
+        require "mini_magick"
+      rescue LoadError => e
+        e.message << " (You may need to install the mini_magick gem)"
+        raise e
+      end
+    end
 
     module ClassMethods
       def convert(format)
@@ -70,8 +77,8 @@ module CarrierWave
         process :resize_to_fit => [width, height]
       end
 
-      def resize_to_fill(width, height)
-        process :resize_to_fill => [width, height]
+      def resize_to_fill(width, height, gravity='Center')
+        process :resize_to_fill => [width, height, gravity]
       end
 
       def resize_and_pad(width, height, background=:transparent, gravity=::Magick::CenterGravity)
@@ -97,6 +104,7 @@ module CarrierWave
     #     image.convert(:png)
     #
     def convert(format)
+      @format = format
       manipulate! do |img|
         img.format(format.to_s.downcase)
         img = yield(img) if block_given?
@@ -158,6 +166,7 @@ module CarrierWave
     #
     # [width (Integer)] the width to scale the image to
     # [height (Integer)] the height to scale the image to
+    # [gravity (String)] the current gravity suggestion (default: 'Center'; options: 'NorthWest', 'North', 'NorthEast', 'West', 'Center', 'East', 'SouthWest', 'South', 'SouthEast')
     #
     # === Yields
     #
@@ -168,12 +177,20 @@ module CarrierWave
         cols, rows = img[:dimensions]
         img.combine_options do |cmd|
           if width != cols || height != rows
-            scale = [width/cols.to_f, height/rows.to_f].max
-            cols = (scale * (cols + 0.5)).round
-            rows = (scale * (rows + 0.5)).round
-            cmd.resize "#{cols}x#{rows}"
+            scale_x = width/cols.to_f
+            scale_y = height/rows.to_f
+            if scale_x >= scale_y
+              cols = (scale_x * (cols + 0.5)).round
+              rows = (scale_x * (rows + 0.5)).round
+              cmd.resize "#{cols}"
+            else
+              cols = (scale_y * (cols + 0.5)).round
+              rows = (scale_y * (rows + 0.5)).round
+              cmd.resize "x#{rows}"
+            end
           end
           cmd.gravity gravity
+          cmd.background "rgba(255,255,255,0.0)"
           cmd.extent "#{width}x#{height}" if cols != width || rows != height
         end
         img = yield(img) if block_given?
@@ -206,7 +223,7 @@ module CarrierWave
         img.combine_options do |cmd|
           cmd.thumbnail "#{width}x#{height}>"
           if background == :transparent
-            cmd.background "rgba(0, 0, 0, 0.0)"
+            cmd.background "rgba(255, 255, 255, 0.0)"
           else
             cmd.background background
           end
@@ -241,11 +258,19 @@ module CarrierWave
     def manipulate!
       cache_stored_file! if !cached?
       image = ::MiniMagick::Image.open(current_path)
-      image = yield(image)
-      image.write(current_path)
-      ::MiniMagick::Image.open(current_path)
+
+      begin
+        image.format(@format.to_s.downcase) if @format
+        image = yield(image)
+        image.write(current_path)
+        image.run_command("identify", current_path)
+      ensure
+        image.destroy!
+      end
     rescue ::MiniMagick::Error, ::MiniMagick::Invalid => e
-      raise CarrierWave::ProcessingError, I18n.translate(:"errors.messages.mini_magick_processing_error", :e => e)
+      default = I18n.translate(:"errors.messages.mini_magick_processing_error", :e => e, :locale => :en)
+      message = I18n.translate(:"errors.messages.mini_magick_processing_error", :e => e, :default => default)
+      raise CarrierWave::ProcessingError, message
     end
 
   end # MiniMagick

@@ -1,3 +1,3 @@
 module CarrierWave
-  VERSION = "0.5.8"
+  VERSION = "0.11.2"
 end

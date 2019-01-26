@@ -1,11 +1,5 @@
 # encoding: utf-8
 
-begin
-  require 'fog'
-rescue LoadError
-  raise "You don't have the 'fog' gem installed"
-end
-
 module CarrierWave
   module Storage
 
@@ -16,14 +10,14 @@ module CarrierWave
     #
     # You need to setup some options to configure your usage:
     #
-    # [:fog_credentials]  credentials for service
+    # [:fog_credentials]  host info and credentials for service
     # [:fog_directory]    specifies name of directory to store data in, assumed to already exist
     #
     # [:fog_attributes]                   (optional) additional attributes to set on files
-    # [:fog_host]                         (optional) non-default host to serve files from
     # [:fog_public]                       (optional) public readability, defaults to true
     # [:fog_authenticated_url_expiration] (optional) time (in seconds) that authenticated urls
     #   will be valid, when fog_public is false and provider is AWS or Google, defaults to 600
+    # [:fog_use_ssl_for_aws]              (optional) #public_url will use https for the AWS generated URL]
     #
     #
     # AWS credentials contain the following keys:
@@ -62,6 +56,11 @@ module CarrierWave
     #     end
     #
     class Fog < Abstract
+      class << self
+        def connection_cache
+          @connection_cache ||= {}
+        end
+      end
 
       ##
       # Store a file
@@ -97,11 +96,13 @@ module CarrierWave
 
       def connection
         @connection ||= begin
-          ::Fog::Storage.new(uploader.fog_credentials)
+          options = credentials = uploader.fog_credentials
+          self.class.connection_cache[credentials] ||= ::Fog::Storage.new(options)
         end
       end
 
       class File
+        include CarrierWave::Utilities::Uri
 
         ##
         # Current local path to file
@@ -125,7 +126,7 @@ module CarrierWave
 
         ##
         # Return a temporary authenticated url to a private file, if available
-        # Only supported for AWS and Google providers
+        # Only supported for AWS, Rackspace and Google providers
         #
         # === Returns
         #
@@ -133,12 +134,18 @@ module CarrierWave
         #   or
         # [NilClass] no authenticated url available
         #
-        def authenticated_url
-          if ['AWS', 'Google'].include?(@uploader.fog_credentials[:provider])
+        def authenticated_url(options = {})
+          if ['AWS', 'Google', 'Rackspace', 'OpenStack'].include?(@uploader.fog_credentials[:provider])
             # avoid a get by using local references
             local_directory = connection.directories.new(:key => @uploader.fog_directory)
             local_file = local_directory.files.new(:key => path)
-            local_file.url(::Fog::Time.now + @uploader.fog_authenticated_url_expiration)
+            if @uploader.fog_credentials[:provider] == "AWS"
+              local_file.url(::Fog::Time.now + @uploader.fog_authenticated_url_expiration, options)
+            elsif ['Rackspace', 'OpenStack'].include?(@uploader.fog_credentials[:provider])
+              connection.get_object_https_url(@uploader.fog_directory, path, ::Fog::Time.now + @uploader.fog_authenticated_url_expiration)
+            else
+              local_file.url(::Fog::Time.now + @uploader.fog_authenticated_url_expiration)
+            end
           else
             nil
           end
@@ -176,6 +183,18 @@ module CarrierWave
         def delete
           # avoid a get by just using local reference
           directory.files.new(:key => path).destroy
+        end
+
+        ##
+        # Return extension of file
+        #
+        # === Returns
+        #
+        # [String] extension of file or nil if the file has no extension
+        #
+        def extension
+          path_elements = path.split('.')
+          path_elements.last if path_elements.size > 1
         end
 
         ##
@@ -219,6 +238,16 @@ module CarrierWave
         end
 
         ##
+        # Check if the file exists on the remote service
+        #
+        # === Returns
+        #
+        # [Boolean] true if file exists or false
+        def exists?
+          !!directory.files.head(path)
+        end
+
+        ##
         # Write file to service
         #
         # === Returns
@@ -233,6 +262,7 @@ module CarrierWave
             :key          => path,
             :public       => @uploader.fog_public
           }.merge(@uploader.fog_attributes))
+          fog_file.close if fog_file && !fog_file.closed?
           true
         end
 
@@ -246,21 +276,32 @@ module CarrierWave
         # [NilClass] no public url available
         #
         def public_url
-          if host = @uploader.fog_host
-            "#{host}/#{path}"
+          encoded_path = encode_path(path)
+          if host = @uploader.asset_host
+            if host.respond_to? :call
+              "#{host.call(self)}/#{encoded_path}"
+            else
+              "#{host}/#{encoded_path}"
+            end
           else
             # AWS/Google optimized for speed over correctness
             case @uploader.fog_credentials[:provider]
             when 'AWS'
-              # if directory is a valid subdomain, use that style for access
-              if @uploader.fog_directory.to_s =~ /^(?:[a-z]|\d(?!\d{0,2}(?:\d{1,3}){3}$))(?:[a-z0-9]|(?![\-])|\-(?![\.])){1,61}[a-z0-9]$/
-                "https://#{@uploader.fog_directory}.s3.amazonaws.com/#{path}"
+              # check if some endpoint is set in fog_credentials
+              if @uploader.fog_credentials.has_key?(:endpoint)
+                "#{@uploader.fog_credentials[:endpoint]}/#{@uploader.fog_directory}/#{encoded_path}"
               else
-                # directory is not a valid subdomain, so use path style for access
-                "https://s3.amazonaws.com/#{@uploader.fog_directory}/#{path}"
+                protocol = @uploader.fog_use_ssl_for_aws ? "https" : "http"
+                # if directory is a valid subdomain, use that style for access
+                if @uploader.fog_directory.to_s =~ /^(?:[a-z]|\d(?!\d{0,2}(?:\d{1,3}){3}$))(?:[a-z0-9\.]|(?![\-])|\-(?![\.])){1,61}[a-z0-9]$/
+                  "#{protocol}://#{@uploader.fog_directory}.s3.amazonaws.com/#{encoded_path}"
+                else
+                  # directory is not a valid subdomain, so use path style for access
+                  "#{protocol}://s3.amazonaws.com/#{@uploader.fog_directory}/#{encoded_path}"
+                end
               end
             when 'Google'
-              "https://commondatastorage.googleapis.com/#{@uploader.fog_directory}/#{path}"
+              "https://commondatastorage.googleapis.com/#{@uploader.fog_directory}/#{encoded_path}"
             else
               # avoid a get by just using local reference
               directory.files.new(:key => path).public_url
@@ -277,11 +318,26 @@ module CarrierWave
         #   or
         # [NilClass] no url available
         #
-        def url
+        def url(options = {})
           if !@uploader.fog_public
-            authenticated_url
+            authenticated_url(options)
           else
             public_url
+          end
+        end
+
+        ##
+        # Return file name, if available
+        #
+        # === Returns
+        #
+        # [String] file name
+        #   or
+        # [NilClass] no file name available
+        #
+        def filename(options = {})
+          if file_url = url(options)
+            URI.decode(file_url).gsub(/.*\/(.*?$)/, '\1').split('?').first
           end
         end
 
@@ -322,7 +378,7 @@ module CarrierWave
         # [Fog::#{provider}::File] file data from remote service
         #
         def file
-          @file ||= directory.files.get(path)
+          @file ||= directory.files.head(path)
         end
 
       end

@@ -11,12 +11,8 @@ require 'carrierwave'
 require 'timecop'
 require 'open-uri'
 require 'sham_rack'
-
-unless defined?(JRUBY_VERSION)
-  # not sure why we need to do this
-  require 'sqlite3/sqlite3_native'
-  require 'sqlite3'
-end
+require 'mini_magick'
+require 'generator_spec'
 
 require 'fog'
 require 'storage/fog_helper'
@@ -26,6 +22,8 @@ unless ENV['REMOTE'] == 'true'
 end
 
 require 'fog_credentials' # after Fog.mock!
+
+I18n.enforce_available_locales = false
 
 CARRIERWAVE_DIRECTORY = "carrierwave#{Time.now.to_i}" unless defined?(CARRIERWAVE_DIRECTORY)
 
@@ -40,6 +38,7 @@ def public_path( *paths )
 end
 
 CarrierWave.root = public_path
+I18n.load_path << File.expand_path(File.join(File.dirname(__FILE__), "..", "lib", "carrierwave", "locale", 'en.yml'))
 
 module CarrierWave
   module Test
@@ -108,6 +107,13 @@ module CarrierWave
         end
       end
     end
+
+    module ManipulationHelpers
+      def color_of_pixel(path, x, y)
+        image = ::MiniMagick::Image.open(path)
+        color = image.run_command("convert", "#{image.path}[1x1+#{x}+#{y}]", "-depth", "8", "txt:").split("\n")[1]
+      end
+    end
   end
 end
 
@@ -116,4 +122,5 @@ RSpec.configure do |config|
   config.include CarrierWave::Test::MockFiles
   config.include CarrierWave::Test::MockStorage
   config.include CarrierWave::Test::I18nHelpers
+  config.include CarrierWave::Test::ManipulationHelpers
 end

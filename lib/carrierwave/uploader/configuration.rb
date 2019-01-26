@@ -9,30 +9,10 @@ module CarrierWave
 
         add_config :root
         add_config :base_path
+        add_config :asset_host
         add_config :permissions
+        add_config :directory_permissions
         add_config :storage_engines
-        add_config :s3_access_policy
-        add_config :s3_bucket
-        add_config :s3_access_key_id
-        add_config :s3_secret_access_key
-        add_config :s3_cnamed
-        add_config :s3_headers
-        add_config :s3_region
-        add_config :s3_use_ssl
-        add_config :s3_authentication_timeout
-        add_config :cloud_files_username
-        add_config :cloud_files_api_key
-        add_config :cloud_files_container
-        add_config :cloud_files_cdn_host
-        add_config :cloud_files_auth_url
-        add_config :cloud_files_snet
-        add_config :grid_fs_connection
-        add_config :grid_fs_database
-        add_config :grid_fs_host
-        add_config :grid_fs_port
-        add_config :grid_fs_username
-        add_config :grid_fs_password
-        add_config :grid_fs_access_url
         add_config :store_dir
         add_config :cache_dir
         add_config :enable_processing
@@ -46,15 +26,17 @@ module CarrierWave
         add_config :fog_attributes
         add_config :fog_credentials
         add_config :fog_directory
-        add_config :fog_host
         add_config :fog_public
         add_config :fog_authenticated_url_expiration
+        add_config :fog_use_ssl_for_aws
 
         # Mounting
         add_config :ignore_integrity_errors
         add_config :ignore_processing_errors
+        add_config :ignore_download_errors
         add_config :validate_integrity
         add_config :validate_processing
+        add_config :validate_download
         add_config :mount_on
 
         # set default values
@@ -96,8 +78,14 @@ module CarrierWave
 
         def add_config(name)
           class_eval <<-RUBY, __FILE__, __LINE__ + 1
+            def self.eager_load_fog(fog_credentials)
+              # see #1198. This will hopefully no longer be necessary after fog 2.0
+              Fog::Storage.new(fog_credentials) if fog_credentials.present?
+            end
+
             def self.#{name}(value=nil)
               @#{name} = value if value
+              eager_load_fog(value) if value && '#{name}' == 'fog_credentials'
               return @#{name} if self.object_id == #{self.object_id} || defined?(@#{name})
               name = superclass.#{name}
               return nil if name.nil? && !instance_variable_defined?("@#{name}")
@@ -105,11 +93,23 @@ module CarrierWave
             end
 
             def self.#{name}=(value)
+              eager_load_fog(value) if '#{name}' == 'fog_credentials'
+              @#{name} = value
+            end
+
+            def #{name}=(value)
+              self.class.eager_load_fog(value) if '#{name}' == 'fog_credentials'
               @#{name} = value
             end
 
             def #{name}
-              self.class.#{name}
+              value = @#{name} if instance_variable_defined?(:@#{name})
+              value = self.class.#{name} unless instance_variable_defined?(:@#{name})
+              if value.instance_of?(Proc)
+                value.arity >= 1 ? value.call(self) : value.call
+              else 
+                value
+              end
             end
           RUBY
         end
@@ -124,26 +124,17 @@ module CarrierWave
         def reset_config
           configure do |config|
             config.permissions = 0644
+            config.directory_permissions = 0755
             config.storage_engines = {
               :file => "CarrierWave::Storage::File",
-              :fog => "CarrierWave::Storage::Fog",
-              :s3 => "CarrierWave::Storage::S3",
-              :grid_fs => "CarrierWave::Storage::GridFS",
-              :right_s3 => "CarrierWave::Storage::RightS3",
-              :cloud_files => "CarrierWave::Storage::CloudFiles"
+              :fog  => "CarrierWave::Storage::Fog"
             }
             config.storage = :file
-            config.s3_headers = {}
-            config.s3_access_policy = :public_read
-            config.s3_region = 'us-east-1'
-            config.s3_authentication_timeout = 600
-            config.grid_fs_database = 'carrierwave'
-            config.grid_fs_host = 'localhost'
-            config.grid_fs_port = 27017
             config.fog_attributes = {}
             config.fog_credentials = {}
             config.fog_public = true
             config.fog_authenticated_url_expiration = 600
+            config.fog_use_ssl_for_aws = true
             config.store_dir = 'uploads'
             config.cache_dir = 'uploads/tmp'
             config.delete_tmp_file_after_storage = true
@@ -152,9 +143,11 @@ module CarrierWave
             config.remove_previously_stored_files_after_update = true
             config.ignore_integrity_errors = true
             config.ignore_processing_errors = true
+            config.ignore_download_errors = true
             config.validate_integrity = true
             config.validate_processing = true
-            config.root = CarrierWave.root
+            config.validate_download = true
+            config.root = lambda { CarrierWave.root }
             config.base_path = CarrierWave.base_path
             config.enable_processing = true
             config.ensure_multipart_form = true

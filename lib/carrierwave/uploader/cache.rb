@@ -8,15 +8,27 @@ module CarrierWave
     end
   end
 
+  class CacheCounter
+    @@counter = 0
+
+    def self.increment
+      @@counter += 1
+    end
+  end
+
   ##
   # Generates a unique cache id for use in the caching system
   #
   # === Returns
   #
-  # [String] a cache id in the format YYYYMMDD-HHMM-PID-RND
+  # [String] a cache id in the format TIMEINT-PID-COUNTER-RND
   #
   def self.generate_cache_id
-    Time.now.strftime('%Y%m%d-%H%M') + '-' + Process.pid.to_s + '-' + ("%04d" % rand(9999))
+    [Time.now.utc.to_i,
+      Process.pid,
+      '%04d' % (CarrierWave::CacheCounter.increment % 1000),
+      '%04d' % rand(9999)
+    ].map(&:to_s).join('-')
   end
 
   module Uploader
@@ -43,8 +55,8 @@ module CarrierWave
         #
         def clean_cached_files!(seconds=60*60*24)
           Dir.glob(File.expand_path(File.join(cache_dir, '*'), CarrierWave.root)).each do |dir|
-            time = dir.scan(/(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})/).first.map { |t| t.to_i }
-            time = Time.utc(*time)
+            time = dir.scan(/(\d+)-\d+-\d+/).first.map { |t| t.to_i }
+            time = Time.at(*time)
             if time < (Time.now.utc - seconds)
               FileUtils.rm_rf(dir)
             end
@@ -70,10 +82,20 @@ module CarrierWave
       # require the file to be stored on the local filesystem.
       #
       def cache_stored_file!
-        sanitized = SanitizedFile.new :tempfile => StringIO.new(file.read),
-          :filename => File.basename(path), :content_type => file.content_type
+        cache!
+      end
 
-        cache! sanitized
+      def sanitized_file
+        _content = file.read
+        if _content.is_a?(File) # could be if storage is Fog
+          sanitized = CarrierWave::Storage::Fog.new(self).retrieve!(File.basename(_content.path))
+          sanitized.read if sanitized.exists?
+
+        else
+          sanitized = SanitizedFile.new :tempfile => StringIO.new(file.read),
+            :filename => File.basename(path), :content_type => file.content_type
+        end
+        sanitized
       end
 
       ##
@@ -81,7 +103,7 @@ module CarrierWave
       #
       # === Returns
       #
-      # [String] a cache name, in the format YYYYMMDD-HHMM-PID-RND/filename.txt
+      # [String] a cache name, in the format TIMEINT-PID-COUNTER-RND/filename.txt
       #
       def cache_name
         File.join(cache_id, full_original_filename) if cache_id and original_filename
@@ -90,9 +112,9 @@ module CarrierWave
       ##
       # Caches the given file. Calls process! to trigger any process callbacks.
       #
-      # By default, cache!() uses copy_to(), which operates by copying the file 
-      # to the cache, then deleting the original file.  If move_to_cache() is 
-      # overriden to return true, then cache!() uses move_to(), which simply 
+      # By default, cache!() uses copy_to(), which operates by copying the file
+      # to the cache, then deleting the original file.  If move_to_cache() is
+      # overriden to return true, then cache!() uses move_to(), which simply
       # moves the file to the cache.  Useful for large files.
       #
       # === Parameters
@@ -103,7 +125,7 @@ module CarrierWave
       #
       # [CarrierWave::FormNotMultipart] if the assigned parameter is a string
       #
-      def cache!(new_file)
+      def cache!(new_file = sanitized_file)
         new_file = CarrierWave::SanitizedFile.new(new_file)
 
         unless new_file.empty?
@@ -116,9 +138,9 @@ module CarrierWave
             self.original_filename = new_file.filename
 
             if move_to_cache
-              @file = new_file.move_to(cache_path, permissions)
+              @file = new_file.move_to(cache_path, permissions, directory_permissions)
             else
-              @file = new_file.copy_to(cache_path, permissions)
+              @file = new_file.copy_to(cache_path, permissions, directory_permissions)
             end
           end
         end
@@ -155,7 +177,9 @@ module CarrierWave
       alias_method :full_original_filename, :original_filename
 
       def cache_id=(cache_id)
-        raise CarrierWave::InvalidParameter, "invalid cache id" unless cache_id =~ /\A[\d]{8}\-[\d]{4}\-[\d]+\-[\d]{4}\z/
+        # Earlier version used 3 part cache_id. Thus we should allow for
+        # the cache_id to have both 3 part and 4 part formats.
+        raise CarrierWave::InvalidParameter, "invalid cache id" unless cache_id =~ /\A[\d]+\-[\d]+(\-[\d]{4})?\-[\d]{4}\z/
         @cache_id = cache_id
       end
 

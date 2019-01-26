@@ -1,7 +1,5 @@
 # encoding: utf-8
 
-require 'active_support/deprecation'
-
 module CarrierWave
   module Uploader
     module Versions
@@ -10,18 +8,7 @@ module CarrierWave
       include CarrierWave::Uploader::Callbacks
 
       included do
-        ##
-        # Add configuration options for versions
-        # class_inheritable_accessor was deprecated in Rails 3.1 and removed for 3.2.
-        # class_attribute was added in 3.0, but doesn't support omitting the instance_reader until 3.0.10
-        # For max compatibility, always use class_inheritable_accessor when possible
-        if respond_to?(:class_inheritable_accessor)
-          ActiveSupport::Deprecation.silence do
-            class_inheritable_accessor :versions, :version_names, :instance_reader => false, :instance_writer => false
-          end
-        else
-          class_attribute :versions, :version_names, :instance_reader => false, :instance_writer => false
-        end
+        class_attribute :versions, :version_names, :instance_reader => false, :instance_writer => false
 
         self.versions = {}
         self.version_names = []
@@ -63,43 +50,8 @@ module CarrierWave
         #
         def version(name, options = {}, &block)
           name = name.to_sym
-          unless versions[name]
-            uploader = Class.new(self)
-            uploader.versions = {}
+          build_version(name, options) unless versions[name]
 
-            # Define the enable_processing method for versions so they get the
-            # value from the parent class unless explicitly overwritten
-            uploader.class_eval <<-RUBY, __FILE__, __LINE__ + 1
-              def self.enable_processing(value=nil)
-                self.enable_processing = value if value
-                if !@enable_processing.nil?
-                  @enable_processing
-                else
-                  superclass.enable_processing
-                end
-              end
-            RUBY
-
-            # Add the current version hash to class attribute :versions
-            current_version = {}
-            current_version[name] = {
-              :uploader => uploader,
-              :options  => options
-            }
-            self.versions = versions.merge(current_version)
-
-            versions[name][:uploader].version_names += [name]
-
-            class_eval <<-RUBY
-              def #{name}
-                versions[:#{name}]
-              end
-            RUBY
-            # as the processors get the output from the previous processors as their
-            # input we must not stack the processors here
-            versions[name][:uploader].processors = versions[name][:uploader].processors.dup
-            versions[name][:uploader].processors.clear
-          end
           versions[name][:uploader].class_eval(&block) if block
           versions[name]
         end
@@ -110,6 +62,62 @@ module CarrierWave
             version[:uploader].recursively_apply_block_to_versions(&block)
           end
         end
+
+      private
+
+        def build_version(name, options)
+          uploader = Class.new(self)
+          const_set("Uploader#{uploader.object_id}".gsub('-', '_'), uploader)
+          uploader.version_names += [name]
+          uploader.versions = {}
+          uploader.processors = []
+
+          uploader.class_eval <<-RUBY, __FILE__, __LINE__ + 1
+            # Define the enable_processing method for versions so they get the
+            # value from the parent class unless explicitly overwritten
+            def self.enable_processing(value=nil)
+              self.enable_processing = value if value
+              if !@enable_processing.nil?
+                @enable_processing
+              else
+                superclass.enable_processing
+              end
+            end
+
+            # Regardless of what is set in the parent uploader, do not enforce the
+            # move_to_cache config option on versions because it moves the original
+            # file to the version's target file.
+            #
+            # If you want to enforce this setting on versions, override this method
+            # in each version:
+            #
+            # version :thumb do
+            #   def move_to_cache
+            #     true
+            #   end
+            # end
+            #
+            def move_to_cache
+              false
+            end
+          RUBY
+
+          class_eval <<-RUBY
+            def #{name}
+              versions[:#{name}]
+            end
+          RUBY
+
+          # Add the current version hash to class attribute :versions
+          current_version = {
+            name => {
+              :uploader => uploader,
+              :options  => options
+            }
+          }
+          self.versions = versions.merge(current_version)
+        end
+
       end # ClassMethods
 
       ##
@@ -138,30 +146,65 @@ module CarrierWave
       end
 
       ##
+      #
+      # === Parameters
+      #
+      # [name (#to_sym)] name of the version
+      #
+      # === Returns
+      #
+      # [Boolean] True when the version exists according to its :if condition
+      #
+      def version_exists?(name)
+        name = name.to_sym
+
+        return false unless self.class.versions.has_key?(name)
+
+        condition = self.class.versions[name][:options][:if]
+        if(condition)
+          if(condition.respond_to?(:call))
+            condition.call(self, :version => name, :file => file)
+          else
+            send(condition, file)
+          end
+        else
+          true
+        end
+      end
+
+      ##
       # When given a version name as a parameter, will return the url for that version
       # This also works with nested versions.
+      # When given a query hash as a parameter, will return the url with signature that contains query params
+      # Query hash only works with AWS (S3 storage).
       #
       # === Example
       #
       #     my_uploader.url                 # => /path/to/my/uploader.gif
       #     my_uploader.url(:thumb)         # => /path/to/my/thumb_uploader.gif
       #     my_uploader.url(:thumb, :small) # => /path/to/my/thumb_small_uploader.gif
+      #     my_uploader.url(:query => {"response-content-disposition" => "attachment"})
+      #     my_uploader.url(:version, :sub_version, :query => {"response-content-disposition" => "attachment"})
       #
       # === Parameters
       #
       # [*args (Symbol)] any number of versions
+      # OR/AND
+      # [Hash] query params
       #
       # === Returns
       #
       # [String] the location where this file is accessible via a url
       #
       def url(*args)
-        if(args.first)
-          raise ArgumentError, "Version #{args.first} doesn't exist!" if versions[args.first.to_sym].nil?
+        if (version = args.first) && version.respond_to?(:to_sym)
+          raise ArgumentError, "Version #{version} doesn't exist!" if versions[version.to_sym].nil?
           # recursively proxy to version
-          versions[args.first.to_sym].url(*args[1..-1])
+          versions[version.to_sym].url(*args[1..-1])
+        elsif args.first
+          super(args.first)
         else
-          super()
+          super
         end
       end
 
@@ -169,16 +212,20 @@ module CarrierWave
       # Recreate versions and reprocess them. This can be used to recreate
       # versions if their parameters somehow have changed.
       #
-      def recreate_versions!
+      def recreate_versions!(*versions)
         # Some files could possibly not be stored on the local disk. This
         # doesn't play nicely with processing. Make sure that we're only
         # processing a cached file
         #
         # The call to store! will trigger the necessary callbacks to both
         # process this version and all sub-versions
-        cache_stored_file! if !cached?
-
-        store!
+        if versions.any?
+          file = sanitized_file if !cached?
+          store_versions!(file, versions)
+        else
+          cache! if !cached?
+          store!
+        end
       end
 
     private
@@ -190,16 +237,7 @@ module CarrierWave
 
       def active_versions
         versions.select do |name, uploader|
-          condition = self.class.versions[name][:options][:if]
-          if(condition)
-            if(condition.respond_to?(:call))
-              condition.call(self, :version => name, :file => file)
-            else
-              send(condition, file)
-            end
-          else
-            true
-          end
+          version_exists?(name)
         end
       end
 
@@ -219,13 +257,32 @@ module CarrierWave
           :filename => new_file.original_filename
 
         active_versions.each do |name, v|
+          next if v.cached?
+
           v.send(:cache_id=, cache_id)
-          v.cache!(processed_parent)
+          # If option :from_version is present, create cache using cached file from
+          # version indicated
+          if self.class.versions[name][:options] && self.class.versions[name][:options][:from_version]
+            # Maybe the reference version has not been cached yet
+            unless versions[self.class.versions[name][:options][:from_version]].cached?
+              versions[self.class.versions[name][:options][:from_version]].cache!(processed_parent)
+            end
+            processed_version = SanitizedFile.new :tempfile => versions[self.class.versions[name][:options][:from_version]],
+              :filename => new_file.original_filename
+            v.cache!(processed_version)
+          else
+            v.cache!(processed_parent)
+          end
         end
       end
 
-      def store_versions!(new_file)
-        active_versions.each { |name, v| v.store!(new_file) }
+      def store_versions!(new_file, versions=nil)
+        if versions
+          active = Hash[active_versions]
+          versions.each { |v| active[v].try(:store!, new_file) } unless active.empty?
+        else
+          active_versions.each { |name, v| v.store!(new_file) }
+        end
       end
 
       def remove_versions!

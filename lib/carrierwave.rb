@@ -3,12 +3,6 @@
 require 'fileutils'
 require 'active_support/core_ext/object/blank'
 require 'active_support/core_ext/class/attribute'
-
-begin
-  require 'active_support/core_ext/class/inheritable_attributes'
-rescue LoadError
-end
-
 require 'active_support/concern'
 
 module CarrierWave
@@ -20,58 +14,9 @@ module CarrierWave
       CarrierWave::Uploader::Base.configure(&block)
     end
 
-    def clean_cached_files!
-      CarrierWave::Uploader::Base.clean_cached_files!
+    def clean_cached_files!(seconds=60*60*24)
+      CarrierWave::Uploader::Base.clean_cached_files!(seconds)
     end
-  end
-
-  class UploadError < StandardError; end
-  class IntegrityError < UploadError; end
-  class InvalidParameter < UploadError; end
-  class ProcessingError < UploadError; end
-  class DownloadError < UploadError; end
-
-  autoload :SanitizedFile, 'carrierwave/sanitized_file'
-  autoload :Mount, 'carrierwave/mount'
-  autoload :RMagick, 'carrierwave/processing/rmagick'
-  autoload :ImageScience, 'carrierwave/processing/image_science'
-  autoload :MiniMagick, 'carrierwave/processing/mini_magick'
-  autoload :MimeTypes, 'carrierwave/processing/mime_types'
-  autoload :VERSION, 'carrierwave/version'
-
-  module Storage
-    autoload :Abstract, 'carrierwave/storage/abstract'
-    autoload :File, 'carrierwave/storage/file'
-    autoload :Fog, 'carrierwave/storage/fog'
-    autoload :S3, 'carrierwave/storage/s3'
-    autoload :GridFS, 'carrierwave/storage/grid_fs'
-    autoload :RightS3, 'carrierwave/storage/right_s3'
-    autoload :CloudFiles, 'carrierwave/storage/cloud_files'
-  end
-
-  module Uploader
-    autoload :Base, 'carrierwave/uploader'
-    autoload :Cache, 'carrierwave/uploader/cache'
-    autoload :Store, 'carrierwave/uploader/store'
-    autoload :Download, 'carrierwave/uploader/download'
-    autoload :Callbacks, 'carrierwave/uploader/callbacks'
-    autoload :Processing, 'carrierwave/uploader/processing'
-    autoload :Versions, 'carrierwave/uploader/versions'
-    autoload :Remove, 'carrierwave/uploader/remove'
-    autoload :ExtensionWhitelist, 'carrierwave/uploader/extension_whitelist'
-    autoload :DefaultUrl, 'carrierwave/uploader/default_url'
-    autoload :Proxy, 'carrierwave/uploader/proxy'
-    autoload :Url, 'carrierwave/uploader/url'
-    autoload :Mountable, 'carrierwave/uploader/mountable'
-    autoload :Configuration, 'carrierwave/uploader/configuration'
-  end
-
-  module Compatibility
-    autoload :Paperclip, 'carrierwave/compatibility/paperclip'
-  end
-
-  module Test
-    autoload :Matchers, 'carrierwave/test/matchers'
   end
 
 end
@@ -99,17 +44,38 @@ elsif defined?(Rails)
           require 'carrierwave/orm/activerecord'
         end
       end
+
+      ##
+      # Loads the Carrierwave locale files before the Rails application locales
+      # letting the Rails application overrite the carrierwave locale defaults
+      config.before_configuration do
+        I18n.load_path << File.join(File.dirname(__FILE__), "carrierwave", "locale", 'en.yml')
+      end
     end
   end
 
 elsif defined?(Sinatra)
-
-  CarrierWave.root = if Sinatra::Application.respond_to?(:public_folder)
-    # Sinatra >= 1.3
-    Sinatra::Application.public_folder
+  if defined?(Padrino) && defined?(PADRINO_ROOT)
+    CarrierWave.root = File.join(PADRINO_ROOT, "public")
   else
-    # Sinatra < 1.3
-    Sinatra::Application.public
-  end
 
+    CarrierWave.root = if Sinatra::Application.respond_to?(:public_folder)
+      # Sinatra >= 1.3
+      Sinatra::Application.public_folder
+    else
+      # Sinatra < 1.3
+      Sinatra::Application.public
+    end
+  end
 end
+
+require "carrierwave/utilities"
+require "carrierwave/error"
+require "carrierwave/sanitized_file"
+require "carrierwave/mount"
+require "carrierwave/processing"
+require "carrierwave/version"
+require "carrierwave/storage"
+require "carrierwave/uploader"
+require "carrierwave/compatibility/paperclip"
+require "carrierwave/test/matchers"

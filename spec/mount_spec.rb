@@ -42,6 +42,20 @@ describe CarrierWave::Mount do
       @subclass_instance.image.should be_an_instance_of(@uploader)
     end
 
+    it "should allow marshalling uploaders and versions" do
+      Object.const_set("MyClass#{@class.object_id}".gsub('-', '_'), @class)
+      Object.const_set("Uploader#{@uploader.object_id}".gsub('-', '_'), @uploader)
+      @uploader.class_eval do
+        def rotate
+        end
+      end
+      @uploader.version :thumb do
+        process :rotate
+      end
+      @instance.image = stub_file('test.jpg')
+      lambda { Marshal.dump @instance.image }.should_not raise_error
+    end
+
     describe "expected behavior with subclassed uploaders" do
       before do
         @class = Class.new
@@ -128,10 +142,20 @@ describe CarrierWave::Mount do
         @instance.image = stub_file('test.jpg')
       end
 
-      it "should fail silently if the image fails an integrity check" do
+      it "should fail silently if the image fails a white list integrity check" do
         @uploader.class_eval do
           def extension_white_list
             %w(txt)
+          end
+        end
+        @instance.image = stub_file('test.jpg')
+        @instance.image.should be_blank
+      end
+
+      it "should fail silently if the image fails a black list integrity check" do
+        @uploader.class_eval do
+          def extension_black_list
+            %w(jpg)
           end
         end
         @instance.image = stub_file('test.jpg')
@@ -218,7 +242,7 @@ describe CarrierWave::Mount do
 
       it "should be the cache name when a file has been cached" do
         @instance.image = stub_file('test.jpg')
-        @instance.image_cache.should =~ %r(^[\d]{8}\-[\d]{4}\-[\d]+\-[\d]{4}/test\.jpg$)
+        @instance.image_cache.should =~ %r(^[\d]+\-[\d]+\-[\d]{4}\-[\d]{4}/test\.jpg$)
       end
 
     end
@@ -228,7 +252,7 @@ describe CarrierWave::Mount do
       before do
         @instance.stub!(:write_uploader)
         @instance.stub!(:read_uploader).and_return(nil)
-        CarrierWave::SanitizedFile.new(file_path('test.jpg')).copy_to(public_path('uploads/tmp/19990512-1202-123-1234/test.jpg'))
+        CarrierWave::SanitizedFile.new(file_path('test.jpg')).copy_to(public_path('uploads/tmp/1369894322-123-1234/test.jpg'))
       end
 
       it "should do nothing when nil is assigned" do
@@ -242,13 +266,13 @@ describe CarrierWave::Mount do
       end
 
       it "retrieve from cache when a cache name is assigned" do
-        @instance.image_cache = '19990512-1202-123-1234/test.jpg'
-        @instance.image.current_path.should == public_path('uploads/tmp/19990512-1202-123-1234/test.jpg')
+        @instance.image_cache = '1369894322-123-1234/test.jpg'
+        @instance.image.current_path.should == public_path('uploads/tmp/1369894322-123-1234/test.jpg')
       end
 
       it "should not write over a previously assigned file" do
         @instance.image = stub_file('test.jpg')
-        @instance.image_cache = '19990512-1202-123-1234/monkey.jpg'
+        @instance.image_cache = '1369894322-123-1234/monkey.jpg'
         @instance.image.current_path.should =~ /test.jpg$/
       end
     end
@@ -398,16 +422,39 @@ describe CarrierWave::Mount do
         @instance.image_integrity_error.should be_nil
       end
 
-      it "should be an error instance after an integrity check has failed" do
-        @uploader.class_eval do
-          def extension_white_list
-            %w(txt)
+      describe "when an integrity check fails" do
+        before do
+          @uploader.class_eval do
+            def extension_white_list
+              %w(txt)
+            end
           end
         end
-        @instance.image = stub_file('test.jpg')
-        e = @instance.image_integrity_error
-        e.should be_an_instance_of(CarrierWave::IntegrityError)
-        e.message.lines.grep(/^You are not allowed to upload/).should be_true
+
+        it "should be an error instance if file was cached" do
+          @instance.image = stub_file('test.jpg')
+          e = @instance.image_integrity_error
+          e.should be_an_instance_of(CarrierWave::IntegrityError)
+          e.message.lines.grep(/^You are not allowed to upload/).should be_true
+        end
+
+        it "should be an error instance if file was downloaded" do
+          sham_rack_app = ShamRack.at('www.example.com').stub
+          sham_rack_app.register_resource('/test.jpg', File.read(file_path('test.jpg')), 'image/jpg')
+
+          @instance.remote_image_url = "http://www.example.com/test.jpg"
+          e = @instance.image_integrity_error
+          e.should be_an_instance_of(CarrierWave::IntegrityError)
+          e.message.lines.grep(/^You are not allowed to upload/).should be_true
+        end
+
+        it "should be an error instance when image file is assigned and remote_image_url is blank" do
+          @instance.image = stub_file('test.jpg')
+          @instance.remote_image_url = ""
+          e = @instance.image_integrity_error
+          e.should be_an_instance_of(CarrierWave::IntegrityError)
+          e.message.lines.grep(/^You are not allowed to upload/).should be_true
+        end
       end
     end
 
@@ -422,15 +469,70 @@ describe CarrierWave::Mount do
         @instance.image_processing_error.should be_nil
       end
 
-      it "should be an error instance after an integrity check has failed" do
-        @uploader.class_eval do
-          process :monkey
-          def monkey
-            raise CarrierWave::ProcessingError, "Ohh noez!"
+      describe "when an processing error occurs" do
+        before do
+          @uploader.class_eval do
+            process :monkey
+            def monkey
+              raise CarrierWave::ProcessingError, "Ohh noez!"
+            end
           end
         end
-        @instance.image = stub_file('test.jpg')
-        @instance.image_processing_error.should be_an_instance_of(CarrierWave::ProcessingError)
+
+        it "should be an error instance if file was cached" do
+          @instance.image = stub_file('test.jpg')
+          @instance.image_processing_error.should be_an_instance_of(CarrierWave::ProcessingError)
+        end
+
+        it "should be an error instance if file was downloaded" do
+          sham_rack_app = ShamRack.at('www.example.com').stub
+          sham_rack_app.register_resource('/test.jpg', File.read(file_path('test.jpg')), 'image/jpg')
+
+          @instance.remote_image_url = "http://www.example.com/test.jpg"
+          @instance.image_processing_error.should be_an_instance_of(CarrierWave::ProcessingError)
+        end
+      end
+    end
+
+    describe '#image_download_error' do
+      before do
+        sham_rack_app = ShamRack.at('www.example.com').stub
+        sham_rack_app.register_resource('/test.jpg', File.read(file_path('test.jpg')), 'image/jpg')
+      end
+
+      it "should be nil by default" do
+        @instance.image_download_error.should be_nil
+      end
+
+      it "should be nil if file download was successful" do
+        @instance.remote_image_url = "http://www.example.com/test.jpg"
+        @instance.image_download_error.should be_nil
+      end
+
+      it "should be an error instance if file could not be found" do
+        @instance.remote_image_url = "http://www.example.com/missing.jpg"
+        @instance.image_download_error.should be_an_instance_of(CarrierWave::DownloadError)
+      end
+    end
+
+    describe '#image_download_error' do
+      before do
+        sham_rack_app = ShamRack.at('www.example.com').stub
+        sham_rack_app.register_resource('/test.jpg', File.read(file_path('test.jpg')), 'image/jpg')
+      end
+
+      it "should be nil by default" do
+        @instance.image_download_error.should be_nil
+      end
+
+      it "should be nil if file download was successful" do
+        @instance.remote_image_url = "http://www.example.com/test.jpg"
+        @instance.image_download_error.should be_nil
+      end
+
+      it "should be an error instance if file could not be found" do
+        @instance.remote_image_url = "http://www.example.com/missing.jpg"
+        @instance.image_download_error.should be_an_instance_of(CarrierWave::DownloadError)
       end
     end
 
@@ -445,7 +547,7 @@ describe CarrierWave::Mount do
         @instance.image = stub_file('test.jpg')
         @instance.store_image!
         @instance.remove_image = true
-        @instance.should_receive(:write_uploader).with(:image, "")
+        @instance.should_receive(:write_uploader).with(:image, nil)
         @instance.write_image_identifier
       end
     end
@@ -555,19 +657,28 @@ describe CarrierWave::Mount do
 
       @class.mount_uploader(:image, @uploader, :ignore_integrity_errors => false)
       @instance = @class.new
-    end
 
-    it "should raise an error if the image fails an integrity check" do
       @uploader.class_eval do
         def extension_white_list
           %w(txt)
         end
       end
+    end
+
+    it "should raise an error if the image fails an integrity check when cached" do
       running {
         @instance.image = stub_file('test.jpg')
       }.should raise_error(CarrierWave::IntegrityError)
     end
 
+    it "should raise an error if the image fails an integrity check when downloaded" do
+      sham_rack_app = ShamRack.at('www.example.com').stub
+      sham_rack_app.register_resource('/test.jpg', File.read(file_path('test.jpg')), 'image/jpg')
+
+      running {
+        @instance.remote_image_url = "http://www.example.com/test.jpg"
+      }.should raise_error(CarrierWave::IntegrityError)
+    end
   end
 
   describe '#mount_uploader with :ignore_processing_errors => false' do
@@ -580,24 +691,59 @@ describe CarrierWave::Mount do
 
       @class.mount_uploader(:image, @uploader, :ignore_processing_errors => false)
       @instance = @class.new
-    end
 
-    it "should raise an error if the image fails to be processed" do
       @uploader.class_eval do
         process :monkey
         def monkey
           raise CarrierWave::ProcessingError, "Ohh noez!"
         end
       end
+    end
+
+    it "should raise an error if the image fails to be processed when cached" do
       running {
         @instance.image = stub_file('test.jpg')
       }.should raise_error(CarrierWave::ProcessingError)
     end
 
+    it "should raise an error if the image fails to be processed when downloaded" do
+      sham_rack_app = ShamRack.at('www.example.com').stub
+      sham_rack_app.register_resource('/test.jpg', File.read(file_path('test.jpg')), 'image/jpg')
+
+      running {
+        @instance.remote_image_url = "http://www.example.com/test.jpg"
+      }.should raise_error(CarrierWave::ProcessingError)
+    end
+
+  end
+
+  describe '#mount_uploader with :ignore_download_errors => false' do
+
+    before do
+      @class = Class.new
+      @class.send(:extend, CarrierWave::Mount)
+
+      @uploader = Class.new(CarrierWave::Uploader::Base)
+
+      @class.mount_uploader(:image, @uploader, :ignore_download_errors => false)
+      @instance = @class.new
+    end
+
+    it "should raise an error if the image fails to be processed" do
+      @uploader.class_eval do
+        def download! uri
+          raise CarrierWave::DownloadError
+        end
+      end
+
+      running {
+        @instance.remote_image_url = "http://www.example.com/test.jpg"
+      }.should raise_error(CarrierWave::DownloadError)
+    end
+
   end
 
   describe '#mount_uploader with :mount_on => :monkey' do
-
 
     before do
       @class = Class.new
@@ -628,10 +774,11 @@ describe CarrierWave::Mount do
         @instance.image = stub_file('test.jpg')
         @instance.store_image!
         @instance.remove_image = true
-        @instance.should_receive(:write_uploader).with(:monkey, "")
+        @instance.should_receive(:write_uploader).with(:monkey, nil)
         @instance.write_image_identifier
       end
     end
+
   end
 
 end

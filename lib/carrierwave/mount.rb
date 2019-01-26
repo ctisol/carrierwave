@@ -20,15 +20,11 @@ module CarrierWave
     # [Hash{Symbol => CarrierWave}] what uploaders are mounted on which columns
     #
     def uploaders
-      @uploaders ||= {}
-      @uploaders = superclass.uploaders.merge(@uploaders) if superclass.respond_to?(:uploaders)
-      @uploaders
+      @uploaders ||= superclass.respond_to?(:uploaders) ? superclass.uploaders.dup : {}
     end
 
     def uploader_options
-      @uploader_options ||= {}
-      @uploader_options = superclass.uploader_options.merge(@uploader_options) if superclass.respond_to?(:uploader_options)
-      @uploader_options
+      @uploader_options ||= superclass.respond_to?(:uploader_options) ? superclass.uploader_options.dup : {}
     end
 
     ##
@@ -62,7 +58,7 @@ module CarrierWave
     #
     #     @user.image.url # => '/some_url.png'
     #
-    # It is also possible (but not recommended) to ommit the uploader, which
+    # It is also possible (but not recommended) to omit the uploader, which
     # will create an anonymous uploader class.
     #
     # Passing a block makes it possible to customize the uploader. This can be
@@ -94,6 +90,7 @@ module CarrierWave
     #
     # [image_integrity_error]   Returns an error object if the last file to be assigned caused an integrity error
     # [image_processing_error]  Returns an error object if the last file to be assigned caused a processing error
+    # [image_download_error]    Returns an error object if the last file to be remotely assigned caused a download error
     #
     # [write_image_identifier]  Uses the write_uploader method to set the identifier.
     # [image_identifier]        Reads out the identifier of the file
@@ -138,18 +135,11 @@ module CarrierWave
     #     end
     #
     def mount_uploader(column, uploader=nil, options={}, &block)
-      if block_given?
-        uploader = Class.new(uploader || CarrierWave::Uploader::Base)
-        uploader.class_eval(&block)
-        uploader.recursively_apply_block_to_versions(&block)
-      else
-        uploader ||= Class.new(CarrierWave::Uploader::Base)
-      end
+      include CarrierWave::Mount::Extension
 
+      uploader = build_uploader(uploader, &block)
       uploaders[column.to_sym] = uploader
       uploader_options[column.to_sym] = options
-
-      include CarrierWave::Mount::Extension
 
       # Make sure to write over accessors directly defined on the class.
       # Simply super to the included module below.
@@ -174,7 +164,7 @@ module CarrierWave
         end
 
         def #{column}?
-          !_mounter(:#{column}).blank?
+          _mounter(:#{column}).present?
         end
 
         def #{column}_url(*args)
@@ -225,6 +215,10 @@ module CarrierWave
           _mounter(:#{column}).processing_error
         end
 
+        def #{column}_download_error
+          _mounter(:#{column}).download_error
+        end
+
         def write_#{column}_identifier
           _mounter(:#{column}).write_identifier
         end
@@ -252,7 +246,27 @@ module CarrierWave
           end
         end
 
+        def mark_remove_#{column}_false
+          _mounter(:#{column}).remove = false
+        end
+
       RUBY
+    end
+
+    private
+
+    def build_uploader(uploader, &block)
+      return uploader if uploader && !block_given?
+
+      uploader = Class.new(uploader || CarrierWave::Uploader::Base)
+      const_set("Uploader#{uploader.object_id}".gsub('-', '_'), uploader)
+
+      if block_given?
+        uploader.class_eval(&block)
+        uploader.recursively_apply_block_to_versions(&block)
+      end
+
+      uploader
     end
 
     module Extension
@@ -281,7 +295,7 @@ module CarrierWave
     # this is an internal class, used by CarrierWave::Mount so that
     # we don't pollute the model with a lot of methods.
     class Mounter #:nodoc:
-      attr_reader :column, :record, :remote_url, :integrity_error, :processing_error
+      attr_reader :column, :record, :remote_url, :integrity_error, :processing_error, :download_error
       attr_accessor :remove
 
       def initialize(record, column, options={})
@@ -291,9 +305,11 @@ module CarrierWave
       end
 
       def write_identifier
+        return if record.frozen?
+
         if remove?
-          record.write_uploader(serialization_column, '')
-        elsif not uploader.identifier.blank?
+          record.write_uploader(serialization_column, nil)
+        elsif uploader.identifier.present?
           record.write_uploader(serialization_column, uploader.identifier)
         end
       end
@@ -304,11 +320,9 @@ module CarrierWave
 
       def uploader
         @uploader ||= record.class.uploaders[column].new(record, column)
+        @uploader.retrieve_from_store!(identifier) if @uploader.blank? && identifier.present?
 
-        if @uploader.blank? and not identifier.blank?
-          @uploader.retrieve_from_store!(identifier)
-        end
-        return @uploader
+        @uploader
       end
 
       def cache(new_file)
@@ -333,17 +347,32 @@ module CarrierWave
       end
 
       def remote_url=(url)
+        return if url.blank?
+
         @remote_url = url
+        @download_error = nil
+        @integrity_error = nil
+
         uploader.download!(url)
+
+      rescue CarrierWave::DownloadError => e
+        @download_error = e
+        raise e unless option(:ignore_download_errors)
+      rescue CarrierWave::ProcessingError => e
+        @processing_error = e
+        raise e unless option(:ignore_processing_errors)
+      rescue CarrierWave::IntegrityError => e
+        @integrity_error = e
+        raise e unless option(:ignore_integrity_errors)
       end
 
       def store!
-        unless uploader.blank?
-          if remove?
-            uploader.remove!
-          else
-            uploader.store!
-          end
+        return if uploader.blank?
+
+        if remove?
+          uploader.remove!
+        else
+          uploader.store!
         end
       end
 
@@ -356,7 +385,7 @@ module CarrierWave
       end
 
       def remove?
-        !remove.blank? and remove !~ /\A0|false$\z/
+        remove.present? && remove !~ /\A0|false$\z/
       end
 
       def remove!

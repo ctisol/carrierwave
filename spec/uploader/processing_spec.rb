@@ -83,6 +83,47 @@ describe CarrierWave::Uploader do
       @uploader.process!("test.jpg")
     end
 
+    context "when using RMagick" do
+      before do
+        def @uploader.cover
+          manipulate! { |frame, index| frame if index.zero? }
+        end
+
+        @uploader_class.send :include, CarrierWave::RMagick
+      end
+
+      after do
+        @uploader.instance_eval { undef cover }
+      end
+
+      context "with a multi-page PDF" do
+        before do
+          @uploader.cache! File.open(file_path("multi_page.pdf"))
+        end
+
+        it "should successfully process" do
+          @uploader_class.process :convert => 'jpg'
+          @uploader.process!
+        end
+
+        it "should support page specific transformations" do
+          @uploader_class.process :cover
+          @uploader.process!
+        end
+      end
+
+      context "with a simple image" do
+        before do
+          @uploader.cache! File.open(file_path("portrait.jpg"))
+        end
+
+        it "should still allow page specific transformations" do
+          @uploader_class.process :cover
+          @uploader.process!
+        end
+      end
+    end
+
     context "with 'enable_processing' set to false" do
       it "should not do any processing" do
         @uploader_class.enable_processing = false
@@ -97,7 +138,7 @@ describe CarrierWave::Uploader do
 
   describe '#cache!' do
     before do
-      CarrierWave.stub!(:generate_cache_id).and_return('20071201-1234-345-2255')
+      CarrierWave.stub!(:generate_cache_id).and_return('1369894322-345-2255')
     end
 
     it "should trigger a process!" do
@@ -108,7 +149,7 @@ describe CarrierWave::Uploader do
 
   describe '#recreate_versions!' do
     before do
-      CarrierWave.stub!(:generate_cache_id).and_return('20071201-1234-345-2255')
+      CarrierWave.stub!(:generate_cache_id).and_return('1369894322-345-2255')
     end
 
     it "should trigger a process!" do

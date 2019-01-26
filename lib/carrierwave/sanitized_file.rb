@@ -2,6 +2,8 @@
 
 require 'pathname'
 require 'active_support/core_ext/string/multibyte'
+require 'mime/types'
+require 'mimemagic'
 
 module CarrierWave
 
@@ -30,7 +32,7 @@ module CarrierWave
     end
 
     ##
-    # Returns the filename as is, without sanizting it.
+    # Returns the filename as is, without sanitizing it.
     #
     # === Returns
     #
@@ -141,7 +143,7 @@ module CarrierWave
     # [Boolean] Whether the file exists
     #
     def exists?
-      return File.exists?(self.path) if self.path
+      return File.exist?(self.path) if self.path
       return false
     end
 
@@ -153,11 +155,15 @@ module CarrierWave
     # [String] contents of the file
     #
     def read
-      if is_path?
+      if @content
+        @content
+      elsif is_path?
         File.open(@file, "rb") {|file| file.read}
       else
         @file.rewind if @file.respond_to?(:rewind)
-        @file.read
+        @content = @file.read
+        @file.close if @file.respond_to?(:close) && @file.respond_to?(:closed?) && !@file.closed?
+        @content
       end
     end
 
@@ -168,12 +174,13 @@ module CarrierWave
     #
     # [new_path (String)] The path where the file should be moved.
     # [permissions (Integer)] permissions to set on the file in its new location.
+    # [directory_permissions (Integer)] permissions to set on created directories.
     #
-    def move_to(new_path, permissions=nil)
+    def move_to(new_path, permissions=nil, directory_permissions=nil)
       return if self.empty?
       new_path = File.expand_path(new_path)
 
-      mkdir!(new_path)
+      mkdir!(new_path, directory_permissions)
       if exists?
         FileUtils.mv(path, new_path) unless new_path == path
       else
@@ -191,16 +198,17 @@ module CarrierWave
     #
     # [new_path (String)] The path where the file should be copied to.
     # [permissions (Integer)] permissions to set on the copy
+    # [directory_permissions (Integer)] permissions to set on created directories.
     #
     # === Returns
     #
     # @return [CarrierWave::SanitizedFile] the location where the file will be stored.
     #
-    def copy_to(new_path, permissions=nil)
+    def copy_to(new_path, permissions=nil, directory_permissions=nil)
       return if self.empty?
       new_path = File.expand_path(new_path)
 
-      mkdir!(new_path)
+      mkdir!(new_path, directory_permissions)
       if exists?
         FileUtils.cp(path, new_path) unless new_path == path
       else
@@ -226,7 +234,7 @@ module CarrierWave
     #
     def to_file
       return @file if @file.is_a?(File)
-      File.open(path) if exists?
+      File.open(path, "rb") if exists?
     end
 
     ##
@@ -237,8 +245,10 @@ module CarrierWave
     # [String] the content type of the file
     #
     def content_type
-      return @content_type if @content_type
-      @file.content_type.to_s.chomp if @file.respond_to?(:content_type) and @file.content_type
+      @content_type ||=
+        existing_content_type ||
+        mime_magic_content_type ||
+        mime_types_content_type
     end
 
     ##
@@ -278,8 +288,10 @@ module CarrierWave
     end
 
     # create the directory if it doesn't exist
-    def mkdir!(path)
-      FileUtils.mkdir_p(File.dirname(path)) unless File.exists?(File.dirname(path))
+    def mkdir!(path, directory_permissions)
+      options = {}
+      options[:mode] = directory_permissions if directory_permissions
+      FileUtils.mkdir_p(File.dirname(path), options) unless File.exists?(File.dirname(path))
     end
 
     def chmod!(path, permissions)
@@ -296,10 +308,30 @@ module CarrierWave
       return name.mb_chars.to_s
     end
 
+    def existing_content_type
+      if @file.respond_to?(:content_type) && @file.content_type
+        @file.content_type.to_s.chomp
+      end
+    end
+
+    def mime_magic_content_type
+      if path
+        File.open(path) do |file|
+          MimeMagic.by_magic(file).try(:type)
+        end
+      end
+    rescue Errno::ENOENT
+      nil
+    end
+
+    def mime_types_content_type
+      ::MIME::Types.type_for(path).first.to_s if path
+    end
+
     def split_extension(filename)
       # regular expressions to try for identifying extensions
       extension_matchers = [
-        /\A(.+)\.(tar\.gz)\z/, # matches "something.tar.gz"
+        /\A(.+)\.(tar\.([glx]?z|bz2))\z/, # matches "something.tar.gz"
         /\A(.+)\.([^\.]+)\z/ # matches "something.jpg"
       ]
 

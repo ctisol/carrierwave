@@ -1,23 +1,7 @@
 # encoding: utf-8
 
-unless defined?(JRUBY_VERSION)
-  # not sure why we need to do this
-  require 'sqlite3/sqlite3_native'
-  require 'sqlite3'
-end
-
-require 'active_record'
 require 'carrierwave/mount'
-require 'carrierwave/orm/activerecord'
-
-# change this if sqlite is unavailable
-dbconfig = {
-  :adapter => 'sqlite3',
-  :database => ':memory:'
-}
-
-ActiveRecord::Base.establish_connection(dbconfig)
-ActiveRecord::Migration.verbose = false
+require File.join(File.dirname(__FILE__), '..', '..', 'spec', 'support', 'activerecord')
 
 class TestMigration < ActiveRecord::Migration
   def self.up

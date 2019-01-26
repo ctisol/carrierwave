@@ -51,15 +51,15 @@ describe CarrierWave::Uploader::Base do
     end
 
     it "should remember the storage when inherited" do
-      @uploader_class.storage :s3
+      @uploader_class.storage :fog
       subclass = Class.new(@uploader_class)
-      subclass.storage.should == CarrierWave::Storage::S3
+      subclass.storage.should == CarrierWave::Storage::Fog
     end
 
     it "should be changeable when inherited" do
-      @uploader_class.storage :s3
+      @uploader_class.storage :fog
       subclass = Class.new(@uploader_class)
-      subclass.storage.should == CarrierWave::Storage::S3
+      subclass.storage.should == CarrierWave::Storage::Fog
       subclass.storage :file
       subclass.storage.should == CarrierWave::Storage::File
     end
@@ -100,6 +100,29 @@ describe CarrierWave::Uploader::Base do
       @uploader_class.add_config :foo_bar
       @uploader_class.foo_bar "monkey"
       @uploader_class.foo_bar.should == "monkey"
+    end
+
+    describe "assigning a proc to a config attribute" do
+      before(:each) do
+        @uploader_class.add_config :hoobatz
+        @uploader_class.hoobatz = this_proc
+      end
+
+      context "when the proc accepts no arguments" do
+        let(:this_proc) { proc { "a return value" } }
+
+        it "calls the proc without arguments" do
+          @uploader_class.new.hoobatz.should == "a return value"
+        end
+      end
+
+      context "when the proc accepts one argument" do
+        let(:this_proc) { proc { |arg1| arg1.should be_an_instance_of(@uploader_class) } }
+
+        it "calls the proc with an instance of the uploader" do
+          @uploader_class.new.hoobatz
+        end
+      end
     end
   end
 end
