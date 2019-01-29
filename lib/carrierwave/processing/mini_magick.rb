@@ -247,7 +247,7 @@ module CarrierWave
     def manipulate!
         
         puts_log("--------------------------------------------------------------------------------------")
-        puts_log("carrierwave  lib/carrierwave/processing/mini_magick.rb  manipulate! method")
+        puts_log("carrierwave  lib/carrierwave/processing/mini_magick.rb  manipulate! method A")
         puts_log("-----------------------------------")
         puts_log("Error uploading file   @cache_id = "+@cache_id.inspect)
         puts_log("-----------------------------------")
@@ -260,11 +260,33 @@ module CarrierWave
         
       cache_stored_file! if !cached?
       image = ::MiniMagick::Image.open(current_path)
+        
+        puts_log("--------------------------------------------------------------------------------------")
+        puts_log("carrierwave  lib/carrierwave/processing/mini_magick.rb  manipulate! method B")
+        puts_log("-----------------------------------")
+        puts_log("Error uploading file   image = "+image.inspect)
+        puts_log("-----------------------------------")
+        puts_log("Error uploading file   current_path = "+current_path.inspect)
+        puts_log("-----------------------------------")
+        puts_log("Error uploading file   current_path.to_s = "+current_path.to_s)
+        puts_log("--------------------------------------------------------------------------------------")
+        
       image = yield(image)
+        
+        puts_log("--------------------------------------------------------------------------------------")
+        puts_log("carrierwave  lib/carrierwave/processing/mini_magick.rb  manipulate! method C")
+        puts_log("-----------------------------------")
+        puts_log("Error uploading file   image = "+image.inspect)
+        puts_log("-----------------------------------")
+        puts_log("Error uploading file   current_path = "+current_path.inspect)
+        puts_log("-----------------------------------")
+        puts_log("Error uploading file   current_path.to_s = "+current_path.to_s)
+        puts_log("--------------------------------------------------------------------------------------")
+        
       image.write(current_path)
         
         puts_log("--------------------------------------------------------------------------------------")
-        puts_log("carrierwave  lib/carrierwave/processing/mini_magick.rb  manipulate! method")
+        puts_log("carrierwave  lib/carrierwave/processing/mini_magick.rb  manipulate! method D")
         puts_log("-----------------------------------")
         puts_log("Error uploading file   image = "+image.inspect)
         puts_log("-----------------------------------")
@@ -277,7 +299,7 @@ module CarrierWave
     rescue ::MiniMagick::Error, ::MiniMagick::Invalid => e
         
         puts_log("--------------------------------------------------------------------------------------")
-        puts_log("carrierwave  lib/carrierwave/processing/mini_magick.rb  manipulate! method")
+        puts_log("carrierwave  lib/carrierwave/processing/mini_magick.rb  manipulate! method E")
         puts_log("-----------------------------------")
         puts_log("Error uploading file   e.message = "+e.message.inspect)
         puts_log("-----------------------------------")
