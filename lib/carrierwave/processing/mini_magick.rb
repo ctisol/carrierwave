@@ -245,10 +245,38 @@ module CarrierWave
     # [CarrierWave::ProcessingError] if manipulation failed.
     #
     def manipulate!
+        
+        puts_log("--------------------------------------------------------------------------------------")
+        puts_log("carrierwave  lib/carrierwave/processing/mini_magick.rb  manipulate! method")
+        puts_log("-----------------------------------")
+        puts_log("Error uploading file   @cache_id = "+@cache_id.inspect)
+        puts_log("-----------------------------------")
+        puts_log("Error uploading file   cached? = "+cached?.inspect)
+        puts_log("-----------------------------------")
+        puts_log("Error uploading file   current_path = "+current_path.inspect)
+        puts_log("-----------------------------------")
+        puts_log("Error uploading file   current_path.to_s = "+current_path.to_s)
+        puts_log("-----------------------------------")
+        puts_log("Error uploading file   e.backtrace.class.to_s = "+e.backtrace.class.to_s)
+        puts_log("-----------------------------------")
+        puts_log("Error uploading file   e.backtrace.inspect = "+e.backtrace.inspect)
+        puts_log("--------------------------------------------------------------------------------------")
+        
       cache_stored_file! if !cached?
       image = ::MiniMagick::Image.open(current_path)
       image = yield(image)
       image.write(current_path)
+        
+        puts_log("--------------------------------------------------------------------------------------")
+        puts_log("carrierwave  lib/carrierwave/processing/mini_magick.rb  manipulate! method")
+        puts_log("-----------------------------------")
+        puts_log("Error uploading file   image = "+image.inspect)
+        puts_log("-----------------------------------")
+        puts_log("Error uploading file   current_path = "+current_path.inspect)
+        puts_log("-----------------------------------")
+        puts_log("Error uploading file   current_path.to_s = "+current_path.to_s)
+        puts_log("--------------------------------------------------------------------------------------")
+        
       ::MiniMagick::Image.open(current_path)
     rescue ::MiniMagick::Error, ::MiniMagick::Invalid => e
         
