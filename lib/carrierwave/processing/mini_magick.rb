@@ -256,10 +256,6 @@ module CarrierWave
         puts_log("Error uploading file   current_path = "+current_path.inspect)
         puts_log("-----------------------------------")
         puts_log("Error uploading file   current_path.to_s = "+current_path.to_s)
-        puts_log("-----------------------------------")
-        puts_log("Error uploading file   e.backtrace.class.to_s = "+e.backtrace.class.to_s)
-        puts_log("-----------------------------------")
-        puts_log("Error uploading file   e.backtrace.inspect = "+e.backtrace.inspect)
         puts_log("--------------------------------------------------------------------------------------")
         
       cache_stored_file! if !cached?
