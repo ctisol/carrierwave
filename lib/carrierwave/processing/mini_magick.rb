@@ -218,6 +218,12 @@ module CarrierWave
       end
     end
 
+    # for development logging
+    def puts_log(line_to_put)
+      puts line_to_put
+      Rails.logger.info line_to_put
+    end
+
     ##
     # Manipulate the image with MiniMagick. This method will load up an image
     # and then pass each of its frames to the supplied block. It will then
@@ -245,6 +251,23 @@ module CarrierWave
       image.write(current_path)
       ::MiniMagick::Image.open(current_path)
     rescue ::MiniMagick::Error, ::MiniMagick::Invalid => e
+        
+        puts_log("--------------------------------------------------------------------------------------")
+        puts_log("carrierwave  lib/carrierwave/processing/mini_magick.rb  manipulate! method")
+        puts_log("-----------------------------------")
+        puts_log("Error uploading file   e.message = "+e.message.inspect)
+        puts_log("-----------------------------------")
+        puts_log("Error uploading file   e = "+e.inspect)
+        puts_log("-----------------------------------")
+        puts_log("Error uploading file   e.class.name = "+e.class.name)
+        puts_log("-----------------------------------")
+        puts_log("Error uploading file   e.message = "+e.message)
+        puts_log("-----------------------------------")
+        puts_log("Error uploading file   e.backtrace.class.to_s = "+e.backtrace.class.to_s)
+        puts_log("-----------------------------------")
+        puts_log("Error uploading file   e.backtrace.inspect = "+e.backtrace.inspect)
+        puts_log("--------------------------------------------------------------------------------------")
+        
       raise CarrierWave::ProcessingError, I18n.translate(:"errors.messages.mini_magick_processing_error", :e => e)
     end
 
