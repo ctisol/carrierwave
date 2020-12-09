@@ -42,6 +42,6 @@ Gem::Specification.new do |s|
   s.add_development_dependency "cloudfiles"
   s.add_development_dependency "fog"
 
-  s.add_development_dependency "mini_magick", :git => 'git@github.com:ctisol/mini_magic.git'
+  s.add_development_dependency "mini_magick", :git => 'git@github.com:ctisol/mini_magick.git'
   s.add_development_dependency "rmagick"
 end
